@@ -1,141 +1,170 @@
 //SPDX-License-Identifier: Unlicense
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
-import "hardhat/console.sol";
+
+// import "hardhat/console.sol";
 
 contract EnglishAuction is IERC721Receiver {
-    uint256 private counter;
-
     mapping(address => mapping(uint256 => Auction)) public auctionInfo;
+
+    mapping(address => mapping(uint256 => NftHolder)) public nftHolders;
 
     enum Status {
         NOT_ACTIVE,
         ACTIVE,
-        FINISHED,
-        WITHDRAWN
+        FINISHED
+    }
+
+    struct NftHolder {
+        address owner;
+        bool addedToAuction;
     }
 
     struct Auction {
-        uint256 nftId;
         address seller;
+        address erc20Token;
         uint256 minBid;
         uint256 maxBid;
-        address maxBidder;
-        uint256 lockTime;
-        uint256 unlockTime;
+        address bidderWallet;
+        uint256 startAt;
+        uint256 endAt;
         uint256 status;
     }
 
     event ListOnAuction(
-        uint256 indexed auctionId,
-        uint256 nftId,
+        uint256 indexed nftId,
         address indexed nftContract,
         address seller,
+        address erc20Token,
         uint256 minBid,
-        uint256 lockTime,
-        uint256 unlockTime
+        uint256 startAt,
+        uint256 endAt
     );
 
     event Bid(
-        uint256 indexed auctionId,
+        uint256 indexed nftId,
         address indexed nftContract,
         address bidder,
         uint256 bid
     );
 
     event Withdraw(
-        uint256 indexed auctionId,
+        address to,
         address indexed nftContract,
-        address winner
+        uint256 indexed nftId
     );
 
-    constructor() {
-        counter = 0;
-    }
+    event TransferNFTFallBack(
+        address from,
+        address indexed nftContract,
+        uint256 indexed nftId
+    );
 
     function onERC721Received(
-        address operator,
-        address from,
-        uint256 tokenId,
+        address _operator,
+        address _from,
+        uint256 _tokenId,
         bytes calldata data
-    ) public override returns (bytes4) {
+    ) public virtual override returns (bytes4) {
+        NftHolder memory holder = nftHolders[msg.sender][_tokenId];
+
+        require(
+            holder.addedToAuction == false,
+            "The auction already has a nft."
+        );
+
+        holder.owner = _from;
+        holder.addedToAuction = false;
+
+        emit TransferNFTFallBack(_from, msg.sender, _tokenId);
+
         return this.onERC721Received.selector;
     }
 
     function listOnAuction(
         uint256 _nftId,
         address _nftContract,
+        address _erc20Token,
         uint256 _minBid,
-        uint256 _lockTime,
-        uint256 _unlockTime
+        uint256 _startAt,
+        uint256 _endAt
     ) public returns (Auction memory) {
         require(
             _nftContract != address(0),
             "Nft contract is not zero address!"
         );
 
+        NftHolder memory holder = nftHolders[_nftContract][_nftId];
+
         require(
-            _lockTime > block.timestamp,
+            holder.addedToAuction == true,
+            "The auction already has a NFT!"
+        );
+
+        require(
+            holder.owner != address(0),
+            "NFT didn't transfer on the auction contract!"
+        );
+
+        require(
+            holder.owner == msg.sender,
+            "Only owner NFT can list on Auction!"
+        );
+
+        require(
+            _startAt > block.timestamp,
             "Lock time cannot be less than current!"
         );
 
-        require(
-            _lockTime < _unlockTime,
-            "Lock time cannot be less than unlock!"
-        );
+        require(_startAt < _endAt, "Lock time cannot be less than unlock!");
 
-        ERC721(_nftContract).safeTransferFrom(
-            msg.sender,
-            address(this),
-            _nftId
-        );
+        holder.addedToAuction = true;
 
         Auction memory newAuction = Auction(
-            _nftId,
             msg.sender,
+            _erc20Token,
             _minBid,
             0,
             address(0),
-            _lockTime,
-            _unlockTime,
+            _startAt,
+            _endAt,
             uint256(Status.NOT_ACTIVE)
         );
 
-        auctionInfo[_nftContract][counter] = newAuction;
+        auctionInfo[_nftContract][_nftId] = newAuction;
 
         emit ListOnAuction(
-            counter,
             _nftId,
             _nftContract,
             msg.sender,
+            _erc20Token,
             _minBid,
-            _lockTime,
-            _unlockTime
+            _startAt,
+            _endAt
         );
-
-        counter++;
 
         return newAuction;
     }
 
     function placeBid(
         address _nftContract,
-        uint256 _auctionId,
+        uint256 _nftId,
         uint256 _bid
     ) external returns (bool) {
+        Auction memory auction = auctionInfo[_nftContract][_nftId];
+
         require(
-            msg.sender != _nftContract,
+            msg.sender != auction.seller,
             "The auction creator cannot place a bid!"
         );
 
-        Auction memory auction = auctionInfo[_nftContract][_auctionId];
-
         if (
-            auction.status != uint256(Status.ACTIVE) &&
-            auction.lockTime < block.timestamp &&
-            auction.unlockTime > block.timestamp
+            auction.status == uint256(Status.NOT_ACTIVE) &&
+            auction.startAt < block.timestamp &&
+            auction.endAt > block.timestamp
         ) {
             auction.status = uint256(Status.ACTIVE);
         }
@@ -148,57 +177,86 @@ contract EnglishAuction is IERC721Receiver {
         require(auction.minBid >= _bid, "The Bid less than minimum!");
         require(auction.maxBid > _bid, "The Bid less than maximum!");
 
-        payable(auction.maxBidder).transfer(auction.maxBid);
+        if (auction.bidderWallet != address(0)) {
+            IERC20(auction.erc20Token).transfer(
+                auction.bidderWallet,
+                auction.maxBid
+            );
+        }
 
+        IERC20(auction.erc20Token).transferFrom(
+            msg.sender,
+            address(this),
+            _bid
+        );
+
+        auction.bidderWallet = msg.sender;
         auction.maxBid = _bid;
-        auction.maxBidder = msg.sender;
 
-        emit Bid(_auctionId, _nftContract, msg.sender, _bid);
+        NftHolder memory holder = nftHolders[_nftContract][_nftId];
+        holder.owner = msg.sender;
+
+        emit Bid(_nftId, _nftContract, msg.sender, _bid);
 
         return true;
     }
 
-    function finishAuction(address _nftContract, uint256 _auctionId) public {
-        Auction storage auction = auctionInfo[_nftContract][_auctionId];
+    function finishAuction(address _nftContract, uint256 _nftId) public {
+        Auction memory auction = auctionInfo[_nftContract][_nftId];
 
         require(
-            auction.unlockTime < block.timestamp,
-            "Unlock time hasn't finished yet!"
+            auction.endAt < block.timestamp &&
+                auction.status == uint256(Status.ACTIVE),
+            "The Auction hasn't finished yet!"
         );
 
         auction.status = uint256(Status.FINISHED);
+        auction.bidderWallet = address(0);
+        auction.maxBid = 0;
+
+        NftHolder memory holder = nftHolders[_nftContract][_nftId];
+
+        holder.addedToAuction = false;
 
         if (auction.maxBid > 0) {
-            payable(auction.seller).transfer(auction.maxBid);
+            IERC721(_nftContract).safeTransferFrom(
+                address(this),
+                msg.sender,
+                _nftId
+            );
+
+            IERC20(auction.erc20Token).transfer(auction.seller, auction.maxBid);
         } else {
-            ERC721(_nftContract).safeTransferFrom(
+            IERC721(_nftContract).safeTransferFrom(
                 address(this),
                 auction.seller,
-                auction.nftId
+                _nftId
             );
         }
     }
 
-    function withdrawNft(address _nftContract, uint256 _auctionId) public {
-        Auction memory auction = auctionInfo[_nftContract][_auctionId];
+    function withdrawNft(address _nftContract, uint256 _nftId) public {
+        NftHolder memory holder = nftHolders[_nftContract][_nftId];
+        Auction memory auction = auctionInfo[_nftContract][_nftId];
 
         require(
-            auction.status == uint256(Status.FINISHED),
+            holder.addedToAuction == false &&
+                auction.status == uint256(Status.FINISHED),
             "The Auction hasn't finished yet!"
         );
 
-        require(
-            auction.maxBidder == msg.sender,
-            "Only winner can withdraw NFT!"
-        );
+        require(holder.owner == msg.sender, "Only owner NFT can withdraw!");
 
-        ERC721(_nftContract).safeTransferFrom(
+        delete auctionInfo[_nftContract][_nftId];
+        delete nftHolders[_nftContract][_nftId];
+
+        IERC721(_nftContract).safeTransferFrom(
             address(this),
             msg.sender,
-            auction.nftId
+            _nftId
         );
 
-        emit Withdraw(_auctionId, _nftContract, msg.sender);
+        emit Withdraw(msg.sender, _nftContract, _nftId);
     }
 }
 
