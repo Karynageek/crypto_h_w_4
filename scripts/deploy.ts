@@ -14,7 +14,7 @@ async function main() {
   await delay(35000);
 
   await hre.run("verify:verify", {
-    address: "0x8FE60279371876b0819e769B5Ce23de236B57Aa3",
+    address: auction.address,
     constructorArguments: [],
   });
 }
