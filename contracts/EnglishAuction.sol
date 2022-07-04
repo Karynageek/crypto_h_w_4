@@ -11,8 +11,7 @@ contract EnglishAuction is IERC721Receiver {
     enum Status {
         NOT_ACTIVE,
         WAIT,
-        ACTIVE,
-        FINISHED
+        ACTIVE
     }
 
     struct Auction {
@@ -22,9 +21,9 @@ contract EnglishAuction is IERC721Receiver {
         uint256 minBid;
         uint256 maxBid;
         address bidderWallet;
-        uint256 startAt;
-        uint256 endAt;
-        uint256 status;
+        uint128 startAt;
+        uint128 endAt;
+        uint8 status;
     }
 
     event ERC721Received(
@@ -39,8 +38,8 @@ contract EnglishAuction is IERC721Receiver {
         address seller,
         address erc20Token,
         uint256 minBid,
-        uint256 startAt,
-        uint256 endAt
+        uint128 startAt,
+        uint128 endAt
     );
 
     event Bid(
@@ -89,20 +88,15 @@ contract EnglishAuction is IERC721Receiver {
         address _nftContract,
         address _erc20Token,
         uint256 _minBid,
-        uint256 _startAt,
-        uint256 _endAt
+        uint128 _startAt,
+        uint128 _endAt
     ) external returns (Auction memory) {
         require(_nftContract != address(0), "Auction: NFT is zero address!");
 
         Auction storage auction = auctionInfo[_nftContract][_nftId];
 
         require(
-            auction.status != uint256(Status.FINISHED),
-            "Auction: not finished!"
-        );
-
-        require(
-            auction.status == uint256(Status.NOT_ACTIVE),
+            auction.status == uint8(Status.NOT_ACTIVE),
             "Auction: NFT listed!"
         );
 
@@ -116,7 +110,7 @@ contract EnglishAuction is IERC721Receiver {
         auction.minBid = _minBid;
         auction.startAt = _startAt;
         auction.endAt = _endAt;
-        auction.status = uint256(Status.WAIT);
+        auction.status = uint8(Status.WAIT);
 
         emit ListOnAuction(
             _nftId,
@@ -141,17 +135,14 @@ contract EnglishAuction is IERC721Receiver {
         require(msg.sender != auction.seller, "Auction: forbidden for owner!");
 
         if (
-            auction.status == uint256(Status.WAIT) &&
+            auction.status == uint8(Status.WAIT) &&
             auction.startAt < block.timestamp &&
             auction.endAt > block.timestamp
         ) {
-            auction.status = uint256(Status.ACTIVE);
+            auction.status = uint8(Status.ACTIVE);
         }
 
-        require(
-            auction.status == uint256(Status.ACTIVE),
-            "Auction: not active!"
-        );
+        require(auction.status == uint8(Status.ACTIVE), "Auction: not active!");
 
         require(_bid > auction.minBid, "Auction: bid less than minimum!");
         require(_bid > auction.maxBid, "Auction: bid less than maximum!");
@@ -182,12 +173,12 @@ contract EnglishAuction is IERC721Receiver {
 
         require(
             (auction.endAt < block.timestamp &&
-                (auction.status == uint256(Status.ACTIVE) ||
-                    auction.status == uint256(Status.WAIT))),
+                (auction.status == uint8(Status.ACTIVE) ||
+                    auction.status == uint8(Status.WAIT))),
             "Auction: cannot finish now!"
         );
 
-        auction.status = uint256(Status.FINISHED);
+        auction.status = uint8(Status.NOT_ACTIVE);
 
         if (auction.maxBid > 0) {
             IERC20(auction.erc20Token).transfer(auction.seller, auction.maxBid);
@@ -206,7 +197,7 @@ contract EnglishAuction is IERC721Receiver {
         require(auction.ownerNft != address(0), "Auction: not exist!");
 
         require(
-            auction.status == uint256(Status.FINISHED),
+            auction.status == uint8(Status.NOT_ACTIVE),
             "Auction: not finished!"
         );
 

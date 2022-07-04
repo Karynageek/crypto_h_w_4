@@ -14,6 +14,12 @@ async function incrementNextBlockTimestamp(amount: number): Promise<void> {
   return ethers.provider.send("evm_increaseTime", [amount]);
 }
 
+async function getBlockTimestamp(tx: any): Promise<number> {
+  const minedTx = await tx.wait();
+  const txBlock = await ethers.provider.getBlock(minedTx.blockNumber);
+  return txBlock.timestamp;
+}
+
 describe('English auction contract', () => {
   let auction: EnglishAuction;
   let owner: SignerWithAddress;
@@ -72,8 +78,6 @@ describe('English auction contract', () => {
   describe('listes on auction', () => {
     let tokenId: BigNumber;
     let result: any;
-    let minedTx: any;
-    let txBlock: any;
     let txTimestamp: any;
     let minBid: BigNumber;
 
@@ -82,9 +86,7 @@ describe('English auction contract', () => {
       await nft.mint('ipfs://QmPShXrfttmnNtE9V6QmcrR8F29V7HMuMrsRyQyUXs35id');
       result = await nft["safeTransferFrom(address,address,uint256)"](owner.address, auction.address, tokenId);
 
-      minedTx = await result.wait();
-      txBlock = await ethers.provider.getBlock(minedTx.blockNumber);
-      txTimestamp = txBlock.timestamp;
+      txTimestamp = await getBlockTimestamp(result);
 
       minBid = parseUnits("1", decimals);
     });
@@ -107,16 +109,9 @@ describe('English auction contract', () => {
         .withArgs(tokenId, nft.address, owner.address, erc20Token.address, minBid, startAt, endAt);
     })
 
-    it('rejects listing when nft contract is zero address', async () => {
-      const startAt = txTimestamp + 86400;
-      const endAt = txTimestamp + 90000;
-
-      await expect(auction.listOnAuction(tokenId, zeroAddress, erc20Token.address, minBid, startAt, endAt)).to.be.revertedWith("Auction: NFT is zero address!");
-    })
-
-    it('rejects listing when an action finished', async () => {
-      const startAt = txTimestamp + 86400;
-      const endAt = txTimestamp + 90000;
+    it('re-listes after the end of the auction', async () => {
+      let startAt = txTimestamp + 86400;
+      let endAt = txTimestamp + 90000;
 
       await auction.listOnAuction(tokenId, nft.address, erc20Token.address, minBid, startAt, endAt);
 
@@ -125,7 +120,28 @@ describe('English auction contract', () => {
 
       await auction.finishAuction(tokenId, nft.address);
 
-      await expect(auction.listOnAuction(tokenId, nft.address, erc20Token.address, minBid, startAt, endAt)).to.be.revertedWith("Auction: not finished!");
+      startAt += 86400;
+      endAt += 90000;
+
+      const result = await auction.listOnAuction(tokenId, nft.address, erc20Token.address, minBid, startAt, endAt);
+
+      const auctionInfo = await auction.auctionInfo(nft.address, tokenId);
+
+      expect(auctionInfo.erc20Token).to.equal(erc20Token.address);
+      expect(auctionInfo.minBid).to.equal(minBid);
+      expect(auctionInfo.startAt).to.equal(startAt);
+      expect(auctionInfo.endAt).to.equal(endAt);
+      expect(auctionInfo.status).to.equal(1);
+
+      await expect(result).to.emit(auction, "ListOnAuction")
+        .withArgs(tokenId, nft.address, owner.address, erc20Token.address, minBid, startAt, endAt);
+    })
+
+    it('rejects listing when nft contract is zero address', async () => {
+      const startAt = txTimestamp + 86400;
+      const endAt = txTimestamp + 90000;
+
+      await expect(auction.listOnAuction(tokenId, zeroAddress, erc20Token.address, minBid, startAt, endAt)).to.be.revertedWith("Auction: NFT is zero address!");
     })
 
     it('rejects listing when an auction has a NFT', async () => {
@@ -162,8 +178,6 @@ describe('English auction contract', () => {
   describe('places a bid', () => {
     let tokenId: BigNumber;
     let txResult: any;
-    let minedTx: any;
-    let txBlock: any;
     let txTimestamp: any;
     let minBid: BigNumber;
     let startAt: any;
@@ -174,9 +188,7 @@ describe('English auction contract', () => {
       await nft.mint('ipfs://QmPShXrfttmnNtE9V6QmcrR8F29V7HMuMrsRyQyUXs35id');
       txResult = await nft["safeTransferFrom(address,address,uint256)"](owner.address, auction.address, tokenId);
 
-      minedTx = await txResult.wait();
-      txBlock = await ethers.provider.getBlock(minedTx.blockNumber);
-      txTimestamp = txBlock.timestamp;
+      txTimestamp = await getBlockTimestamp(txResult);
 
       minBid = parseUnits("1", decimals);
       startAt = txTimestamp + 86400;
@@ -295,9 +307,7 @@ describe('English auction contract', () => {
       await nft.mint('ipfs://QmPShXrfttmnNtE9V6QmcrR8F29V7HMuMrsRyQyUXs35id');
       const txResult = await nft["safeTransferFrom(address,address,uint256)"](owner.address, auction.address, tokenId);
 
-      const minedTx = await txResult.wait();
-      const txBlock = await ethers.provider.getBlock(minedTx.blockNumber);
-      const txTimestamp = txBlock.timestamp;
+      const txTimestamp = await getBlockTimestamp(txResult);
 
       const minBid = parseUnits("1", decimals);
       const startAt = txTimestamp + 86400;
@@ -320,7 +330,7 @@ describe('English auction contract', () => {
 
       expect(sellerBalanceAfter).to.equal(sellerBalanceBefore);
 
-      expect(auctionInfoAfter.status).to.equal(3);
+      expect(auctionInfoAfter.status).to.equal(0);
       expect(auctionInfoAfter.bidderWallet).to.equal(zeroAddress);
       expect(auctionInfoAfter.maxBid).to.equal(0);
       expect(auctionInfoAfter.ownerNft).to.equal(auctionInfoBefore.ownerNft);
@@ -334,9 +344,7 @@ describe('English auction contract', () => {
       await nft.mint('ipfs://QmPShXrfttmnNtE9V6QmcrR8F29V7HMuMrsRyQyUXs35id');
       const txResult = await nft["safeTransferFrom(address,address,uint256)"](owner.address, auction.address, tokenId);
 
-      const minedTx = await txResult.wait();
-      const txBlock = await ethers.provider.getBlock(minedTx.blockNumber);
-      const txTimestamp = txBlock.timestamp;
+      const txTimestamp = await getBlockTimestamp(txResult);
 
       const minBid = parseUnits("1", decimals);
       const startAt = txTimestamp + 86400;
@@ -372,7 +380,7 @@ describe('English auction contract', () => {
       expect(auctionBalanceAfter).to.equal(auctionBalanceBefore.sub(bid));
       expect(sellerBalanceAfter).to.equal(sellerBalanceBefore.add(bid));
 
-      expect(auctionInfoAfter.status).to.equal(3);
+      expect(auctionInfoAfter.status).to.equal(0);
       expect(auctionInfoAfter.bidderWallet).to.equal(zeroAddress);
       expect(auctionInfoAfter.maxBid).to.equal(0);
       expect(auctionInfoAfter.ownerNft).to.equal(auctionInfoBefore.bidderWallet);
@@ -395,9 +403,7 @@ describe('English auction contract', () => {
       await nft.mint('ipfs://QmPShXrfttmnNtE9V6QmcrR8F29V7HMuMrsRyQyUXs35id');
       const txResult = await nft["safeTransferFrom(address,address,uint256)"](owner.address, auction.address, tokenId);
 
-      const minedTx = await txResult.wait();
-      const txBlock = await ethers.provider.getBlock(minedTx.blockNumber);
-      const txTimestamp = txBlock.timestamp;
+      const txTimestamp = await getBlockTimestamp(txResult);
 
       const minBid = parseUnits("1", decimals);
       const startAt = txTimestamp + 86400;
@@ -453,7 +459,15 @@ describe('English auction contract', () => {
     it('rejects withdrawing a nft when an auction has not finished', async () => {
       const tokenId = await nft.tokenCounter();
       await nft.mint('ipfs://QmPShXrfttmnNtE9V6QmcrR8F29V7HMuMrsRyQyUXs35id');
-      await nft["safeTransferFrom(address,address,uint256)"](owner.address, auction.address, tokenId);
+      const txResult = await nft["safeTransferFrom(address,address,uint256)"](owner.address, auction.address, tokenId);
+
+      const txTimestamp = await getBlockTimestamp(txResult);
+
+      const minBid = parseUnits("1", decimals);
+      const startAt = txTimestamp + 86400;
+      const endAt = txTimestamp + 90000;
+
+      await auction.listOnAuction(tokenId, nft.address, erc20Token.address, minBid, startAt, endAt);
 
       await expect(auction.withdrawNft(tokenId, nft.address)).to.be.revertedWith("Auction: not finished!");
     })
@@ -463,9 +477,7 @@ describe('English auction contract', () => {
       await nft.mint('ipfs://QmPShXrfttmnNtE9V6QmcrR8F29V7HMuMrsRyQyUXs35id');
       const txResult = await nft["safeTransferFrom(address,address,uint256)"](owner.address, auction.address, tokenId);
 
-      const minedTx = await txResult.wait();
-      const txBlock = await ethers.provider.getBlock(minedTx.blockNumber);
-      const txTimestamp = txBlock.timestamp;
+      const txTimestamp = await getBlockTimestamp(txResult);
 
       const minBid = parseUnits("1", decimals);
       const startAt = txTimestamp + 86400;
